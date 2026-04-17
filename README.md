@@ -1,173 +1,180 @@
-# Smart EV Charging (PV + HA + go-e + Bluelink)
+# Smart EV Charging (PV + Home Assistant + go-e + Bluelink)
 
 ## Overview
 
-System do inteligentnego ładowania EV:
-- Fronius (PV + grid)
-- go-e (ładowarka)
-- Bluelink (SoC)
-- Home Assistant (logika)
+Home energy-aware EV charging system based on:
+- Fronius (PV + grid data)
+- go-e (charger control)
+- Bluelink (vehicle SoC)
+- Home Assistant (logic)
 
-Cel:
-- max PV
-- min grid
-- ochrona baterii
-- przewidywalne zachowanie
-
----
-
-## Architektura
-
-Fronius -> HA -> decyzje  
-Bluelink -> HA -> SoC  
-go-e -> HA -> wykonanie
+Goals:
+- maximize PV self-consumption
+- minimize grid usage
+- protect battery health
+- support scheduled and manual charging
 
 ---
 
-## SoC
+## Architecture
 
-- SoC real: Bluelink co 10–15 min
-- SoC est: liczony z energii go-e
-
-```
-soc_est = soc_anchor + (delta_kWh * eff / 39.2)
-```
-
-- anchor = moment ostatniego odczytu z auta
+Fronius -> HA -> decision engine  
+Bluelink -> HA -> SoC (low frequency)  
+go-e -> HA -> execution (charging control)
 
 ---
 
-## Tryby
+## SoC Strategy
+
+Hybrid approach:
+
+- soc_real -> Bluelink (every 10–15 min)
+- soc_est -> computed locally from go-e energy
+
+soc_est = soc_anchor + (delta_kWh * efficiency / battery_capacity)
+
+Anchor is updated on every Bluelink sync.
+
+---
+
+## Modes
 
 ### 1. pv_surplus
 
-- ładuj tylko z nadwyżki
-- brak importu
+- charge only from PV excess
+- avoid grid import
 
-```
-available = export - buffer
-```
+available_power = export - buffer
 
-- jeśli < min → stop
-- jeśli > → dobierz prąd
+- if below minimum -> stop
+- otherwise set current dynamically
 
 ---
 
 ### 2. turbo
 
-- max prąd
-- ignoruj PV
-- stop przy target
+- max current
+- ignore PV / battery / cost
+- stop at target SoC
 
 ---
 
-### 3. scheduled
+### 3. scheduled (safe + just-in-time)
 
-#### Parametry:
+Parameters:
 - target_soc
-- safe_soc (np. 80)
+- safe_soc (e.g. 80%)
 - deadline
 
 ---
 
-### Strefy
+## Scheduled Logic
 
-#### < safe_soc
-- PV first
-- można ładować wcześniej
+### Zone A: below safe_soc
 
-#### >= safe_soc
-- just-in-time
-- nie ładować tylko dlatego że jest PV
-- cel: osiągnąć target blisko deadline
+- PV-first
+- allowed to charge early
+- no strict optimization
 
 ---
 
-### Planowanie
+### Zone B: above safe_soc
 
-```
-missing_kWh
-hours_left
-required_kw
-required_amp
-```
+- just-in-time charging
+- do NOT charge early just because PV is available
+- goal: reach target as late as possible
 
 ---
 
-### Start
+### Planning
 
-jeśli required_amp < min:
-- policz latest_start
-- czekaj
-
-jeśli now >= latest_start:
-- start
+missing_kWh  
+hours_left  
+required_power  
+required_current  
 
 ---
 
-### Reguła prądu
+### Start condition
 
-```
-set_amp = required_amp
-```
+If required current < minimum:
 
----
+latest_start = deadline - (missing_kWh / min_power)
 
-## Harmonogram
-
-np:
-- pon 07:00 → 80%
-- czw 07:00 → 80%
-
-zawsze bierz najbliższy target
+-> wait until latest_start
 
 ---
 
-## Priorytety
+### Current rule
 
-dom -> auto -> bateria -> sieć
+set_current = required_current
 
----
-
-## Bateria
-
-- 80% ≠ magiczna granica
-- ważne: czas przy wysokim SoC
-
-### zakresy:
-- 20–70% ideal
-- 70–85% ok
-- 85–95% umiarkowane
-- 95–100% tylko przed jazdą
+(no aggressive PV usage above safe_soc)
 
 ---
 
-## Pętla sterowania
+## Scheduling
 
-- co 10–15s decyzja
-- co 10–15 min sync z Bluelink
+Example:
 
----
+- Monday 07:00 -> 80%
+- Thursday 07:00 -> 80%
 
-## Anti flicker
-
-- start delay ~60s
-- stop delay ~60–120s
+System always selects nearest upcoming target.
 
 ---
 
-## Zasady
+## Priorities
 
-- steruj po export/import, nie po PV
-- licz energię z go-e, nie komendy
-- nie budź auta bez potrzeby
-- nie trzymaj długo 100%
+home -> EV -> battery -> grid
+
+---
+
+## Battery Rules
+
+- 80% is NOT a hard limit
+- key factor = time spent at high SoC
+
+Ranges:
+
+- 20–70% -> optimal
+- 70–85% -> safe
+- 85–95% -> moderate stress
+- 95–100% -> avoid long duration
+
+Rule:
+
+Charging to 100% is fine  
+Keeping it at 100% for hours is not
+
+---
+
+## Control Loop
+
+- decision loop: every 10–15s
+- Bluelink sync: every 10–15 min
+
+---
+
+## Anti-flicker
+
+- start delay: ~60s
+- stop delay: ~60–120s
+
+---
+
+## Key Principles
+
+- control based on grid import/export, not raw PV
+- use real energy (kWh), not planned values
+- avoid frequent vehicle wakeups
+- minimize time at high SoC
 
 ---
 
 ## TL;DR
 
-- PV do 80% agresywnie
-- powyżej 80% planuj
-- turbo gdy trzeba
-- SoC = real + estymacja
+- PV -> charge aggressively up to 80%
+- >80% -> charge just-in-time
+- turbo when needed
+- SoC = real + estimated
