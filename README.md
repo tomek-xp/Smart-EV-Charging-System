@@ -12,7 +12,8 @@ Goals:
 - maximize PV self-consumption
 - minimize grid usage
 - protect battery health
-- support scheduled and manual charging
+- provide predictable daily readiness
+- allow manual overrides
 
 ---
 
@@ -37,7 +38,7 @@ Anchor is updated on every Bluelink sync.
 
 ---
 
-## Modes
+## Charging Modes
 
 ### 1. pv_surplus
 
@@ -47,7 +48,7 @@ Anchor is updated on every Bluelink sync.
 available_power = export - buffer
 
 - if below minimum -> stop
-- otherwise set current dynamically
+- otherwise adjust current dynamically
 
 ---
 
@@ -63,7 +64,7 @@ available_power = export - buffer
 
 Parameters:
 - target_soc
-- safe_soc (e.g. 80%)
+- safe_soc (default: 80%)
 - deadline
 
 ---
@@ -109,22 +110,55 @@ latest_start = deadline - (missing_kWh / min_power)
 
 set_current = required_current
 
-(no aggressive PV usage above safe_soc)
+---
+
+## Scheduling Model
+
+### Daily Baseline
+
+Default daily readiness target.
+
+Example:
+- Every day 07:00 -> 70%
+
+Purpose:
+- ensure daily usability
+- minimize high SoC exposure
 
 ---
 
-## Scheduling
+### Recurring Targets
+
+Higher priority scheduled events.
 
 Example:
-
 - Monday 07:00 -> 80%
 - Thursday 07:00 -> 80%
 
-System always selects nearest upcoming target.
+Purpose:
+- ensure higher readiness on specific days
 
 ---
 
-## Priorities
+### One-time Override
+
+Manual override for a specific time.
+
+Example:
+- Tomorrow 07:00 -> 100%
+
+Purpose:
+- trips / exceptional use
+
+---
+
+### Priority
+
+turbo > one-time override > recurring > daily baseline
+
+---
+
+## Priorities (Energy Flow)
 
 home -> EV -> battery -> grid
 
@@ -174,7 +208,8 @@ Keeping it at 100% for hours is not
 
 ## TL;DR
 
-- PV -> charge aggressively up to 80%
-- >80% -> charge just-in-time
+- daily baseline ~70%
+- PV to 80% aggressively
+- above 80% just-in-time
 - turbo when needed
 - SoC = real + estimated
